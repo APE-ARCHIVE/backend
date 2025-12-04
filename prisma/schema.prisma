@@ -1,0 +1,212 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- ENUMS ---
+
+enum Role {
+  GUEST       // Default until they select a role
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum ResourceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum CategoryType {
+  SUBJECT
+  GRADE
+  MEDIUM
+  RESOURCE_TYPE
+  TAG           // New: For forum tags (e.g., "Rotational-Motion")
+}
+
+// --- USER & AUTH ---
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  googleId      String?   @unique // To link Google Account securely
+  name          String?
+  imageUrl      String?   // From Google Profile
+  
+  role          Role      @default(GUEST) 
+  isOnboarded   Boolean   @default(false) // True after they select Student/Teacher
+  
+  createdAt     DateTime  @default(now())
+  
+  // Relations
+  studentProfile StudentProfile?
+  teacherProfile TeacherProfile?
+  
+  uploads        Resource[]     @relation("UserUploads")
+  announcements  Announcement[]
+  
+  // Forum Relations
+  questions      Question[]
+  answers        Answer[]
+  votes          Vote[]         // Keeping track of what they upvoted
+}
+
+model StudentProfile {
+  id        String   @id @default(uuid())
+  school    String?  // e.g. "Royal College"
+  batch     String?  // e.g. "2025 A/L"
+  
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  
+  // Interests (Linked to Categories like "Combined Maths")
+  interests Category[] 
+}
+
+model TeacherProfile {
+  id             String   @id @default(uuid())
+  bio            String?  @db.Text
+  qualifications String?
+  
+  whatsappNumber String?
+  telegramUser   String?
+  
+  isAvailable    Boolean  @default(true)
+  
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id])
+  
+  subjects       Category[]
+}
+
+// --- FORUM (Q&A) ---
+
+model Question {
+  id          String   @id @default(uuid())
+  title       String
+  content     String   @db.Text // Supports Markdown/HTML
+  slug        String   @unique  // for SEO: /forum/how-to-solve-integration-q1
+  
+  views       Int      @default(0)
+  isSolved    Boolean  @default(false)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id])
+  
+  categories  Category[] // Tags: "Physics", "Mechanics"
+  answers     Answer[]
+}
+
+model Answer {
+  id          String   @id @default(uuid())
+  content     String   @db.Text
+  
+  isAccepted  Boolean  @default(false) // If the student marks this as the correct answer
+  upvotes     Int      @default(0)     // Calculated count
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  questionId  String
+  question    Question @relation(fields: [questionId], references: [id])
+  
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id])
+  
+  votes       Vote[]   // Who voted on this answer?
+}
+
+// To prevent spam voting (1 user = 1 vote per answer)
+model Vote {
+  id        String   @id @default(uuid())
+  
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  
+  answerId  String
+  answer    Answer   @relation(fields: [answerId], references: [id])
+  
+  @@unique([userId, answerId]) // User can only vote once per answer
+}
+
+// --- RESOURCES & STORAGE (Existing) ---
+
+model StorageNode {
+  id             Int      @id @default(autoincrement())
+  email          String   @unique 
+  refreshToken   String   
+  totalSpace     BigInt   
+  usedSpace      BigInt   @default(0) 
+  isActive       Boolean  @default(true)
+  lastUploadAt   DateTime @default(now()) 
+
+  files          Resource[]
+}
+
+model Category {
+  id          Int          @id @default(autoincrement())
+  name        String
+  slug        String       @unique 
+  type        CategoryType
+  
+  // Relations
+  resources        Resource[]   
+  questions        Question[]       // Forum tags
+  teacherProfiles  TeacherProfile[]
+  studentProfiles  StudentProfile[] // Student interests
+}
+
+model Resource {
+  id          String         @id @default(uuid())
+  title       String
+  description String?        @db.Text
+  
+  driveFileId String?  
+  mimeType    String?  
+  fileSize    BigInt?  
+  externalUrl String? 
+
+  status      ResourceStatus @default(PENDING)
+  views       Int            @default(0)
+  downloads   Int            @default(0)
+  
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  categories    Category[]   
+  storageNodeId Int?         
+  storageNode   StorageNode? @relation(fields: [storageNodeId], references: [id])
+  uploaderId    String
+  uploader      User         @relation("UserUploads", fields: [uploaderId], references: [id])
+}
+
+model Announcement {
+  id        String   @id @default(uuid())
+  title     String
+  content   String   @db.Text 
+  priority  Priority @default(NORMAL)
+  isActive  Boolean  @default(true) 
+  expiresAt DateTime? 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+}
+
+enum Priority {
+  NORMAL
+  HIGH
+  CRITICAL
+}

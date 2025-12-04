@@ -1,0 +1,109 @@
+import { Context } from "elysia";
+import * as authService from "../services/auth.service";
+import { GoogleLoginBody, RefreshTokenBody } from "../dto/auth.dto";
+import { env } from "../config/env";
+import { UnauthorizedError } from "../utils/error";
+import { asyncHandler } from "../middlewares/async-handler.middleware";
+import { log } from "../utils/logger";
+
+/**
+ * Handle Google Login/Signup
+ */
+export const googleLogin = asyncHandler(async ({ body, jwt, set }: any) => {
+    const { idToken } = body;
+
+    log.info("Processing Google login request");
+
+    // 1. Verify Google Token & Get/Create User
+    const user = await authService.loginWithGoogle(idToken);
+
+    // 2. Generate Tokens
+    const accessToken = await jwt.sign({
+        id: user.id,
+        role: user.role,
+        deviceId: "web", // Default or extract from headers
+    });
+
+    // Note: For refresh token, ideally use a separate secret/plugin or store in DB.
+    // Here we sign with the same secret but you might want to differentiate.
+    // Since the current setup has one jwt plugin, we'll use it.
+    // Ideally, we should have a separate signer for refresh tokens.
+    const refreshToken = await jwt.sign({
+        id: user.id,
+        type: "refresh"
+    });
+
+    log.info("Tokens generated successfully", { userId: user.id });
+
+    return {
+        success: true,
+        data: {
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                role: user.role,
+                imageUrl: user.imageUrl,
+                isOnboarded: user.isOnboarded
+            },
+            accessToken,
+            refreshToken
+        }
+    };
+});
+
+/**
+ * Get Current User (/me)
+ */
+export const getMe = asyncHandler(async ({ user }: any) => {
+    log.debug("Fetching current user profile", { userId: user.userId });
+    // user is attached by authMiddleware
+    const dbUser = await authService.getUserById(user.userId);
+
+    return {
+        success: true,
+        data: {
+            id: dbUser.id,
+            email: dbUser.email,
+            name: dbUser.name,
+            role: dbUser.role,
+            imageUrl: dbUser.imageUrl,
+            isOnboarded: dbUser.isOnboarded,
+            createdAt: dbUser.createdAt
+        }
+    };
+});
+
+/**
+ * Refresh Token
+ */
+export const refreshToken = asyncHandler(async ({ body, jwt }: any) => {
+    const { refreshToken } = body;
+
+    log.info("Processing refresh token request");
+
+    const payload = await jwt.verify(refreshToken);
+    if (!payload) {
+        log.warn("Invalid refresh token provided");
+        throw new UnauthorizedError("Invalid Refresh Token");
+    }
+
+    // Check if user still exists
+    const user = await authService.getUserById(payload.id as string);
+
+    // Generate new Access Token
+    const newAccessToken = await jwt.sign({
+        id: user.id,
+        role: user.role,
+        deviceId: "web"
+    });
+
+    log.info("Access token refreshed successfully", { userId: user.id });
+
+    return {
+        success: true,
+        data: {
+            accessToken: newAccessToken
+        }
+    };
+});
